@@ -78,7 +78,13 @@ runs:
         BODY=$(echo "$RESPONSE" | head -n -1)
 
         if [ "$HTTP_CODE" != "200" ]; then
-          echo "::error::Zoneploy API error (HTTP $HTTP_CODE): $BODY"
+          if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            echo "::error::Unauthorized: invalid or expired deploy token. Check that the token is correct and hasn't been revoked."
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "::error::Deploy token not found. Make sure the token exists in your Zoneploy organization."
+          else
+            echo "::error::Zoneploy API error (HTTP $HTTP_CODE): $BODY"
+          fi
           exit 1
         fi
 
@@ -118,14 +124,29 @@ runs:
       if: steps.detect.outputs.type == 'container'
       shell: bash
       run: |
-        RESPONSE=$(curl -sf -X POST "${{ inputs.api-url }}/api/v1/deploy" \
+        RESPONSE=$(curl -s -X POST "${{ inputs.api-url }}/api/v1/deploy" \
           -H "Authorization: Bearer ${{ inputs.token }}" \
           -H "Content-Type: application/json" \
           -d "$(jq -n \
             --arg image "${{ steps.registry.outputs.namespace }}:${{ github.sha }}" \
-            '{image: $image}')")
+            '{image: $image}')" \
+          -w "\n%{http_code}") || true
 
-        echo "Deploy started: $(echo "$RESPONSE" | jq -r '.deployUrl // .message // "ok"')"
+        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+        BODY=$(echo "$RESPONSE" | head -n -1)
+
+        if [ "$HTTP_CODE" != "202" ]; then
+          if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            echo "::error::Unauthorized: invalid or expired deploy token."
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "::error::Deploy token not found. Make sure the token exists in your Zoneploy organization."
+          else
+            echo "::error::Deploy failed (HTTP $HTTP_CODE): $BODY"
+          fi
+          exit 1
+        fi
+
+        echo "Deploy started: $(echo "$BODY" | jq -r '.deployUrl // .message // "ok"')"
 
     # ── Stack ────────────────────────────────────────────────────────────────
 
